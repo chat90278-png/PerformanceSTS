@@ -116,9 +116,10 @@ def fmt_num(v) -> str:
         return str(v or "")
 
 class ExcelStore:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, lazy_open: bool = False):
         self.path = Path(path)
-        self.wb = None
+        self._wb = None
+        self._lazy_open = bool(lazy_open) and self.path.exists()
         self._platform_next_row_hint: Dict[str, int] = {}
         self._sheet_cache: Dict[str, List[List]] = {}
         self._merge_map_cache: Dict[str, Dict[Tuple[int, int], Tuple[int, int]]] = {}
@@ -127,9 +128,32 @@ class ExcelStore:
         self._save_batch_depth = 0
         self._save_requested = False
         self._full_wb_event = threading.Event()  # wb hazır olduğunda set edilir
-        self.open_or_create()
+        if not self._lazy_open:
+            self.open_or_create()
+
+    @property
+    def wb(self):
+        """Workbook nesnesi. lazy_open=True ise ilk gerçek kullanımda yüklenir."""
+        if self._wb is None:
+            self.open_or_create()
+        return self._wb
+
+    @wb.setter
+    def wb(self, value):
+        self._wb = value
+
+    @property
+    def is_lazy_open(self) -> bool:
+        """Workbook henüz belleğe alınmadıysa True döner."""
+        return self._wb is None and self._lazy_open
+
+    def ensure_loaded(self):
+        """Lazy workbook'u açıkça yükler ve ExcelStore'u düzenlemeye hazır hale getirir."""
+        _ = self.wb
+        return self
 
     def open_or_create(self):
+        self._lazy_open = False
         needs_initial_save = not self.path.exists()
         had_home_sheet = False
         if self.path.exists():

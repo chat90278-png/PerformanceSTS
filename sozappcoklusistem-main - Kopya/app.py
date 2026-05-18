@@ -6820,8 +6820,13 @@ class MainWindow(QMainWindow):
         # Loading overlay index_ready'de kapandı; burada sadece store'u kaydet
         if self.store:
             self.update_connection_badge("ok")
-            self.connection_label.setText(f"✓ Excel bağlı  [{getattr(self.store, 'path', self.path).name}]")
-            self._apply_version_to_ui()
+            if getattr(self.store, "is_lazy_open", False):
+                self.connection_label.setText(
+                    f"✓ Excel bağlı  [{getattr(self.store, 'path', self.path).name}]  — düzenleme ilk kullanımda hazırlanacak"
+                )
+            else:
+                self.connection_label.setText(f"✓ Excel bağlı  [{getattr(self.store, 'path', self.path).name}]")
+                self._apply_version_to_ui()
             self._remember_version_baseline()
         else:
             self.update_connection_badge("bad")
@@ -7374,6 +7379,26 @@ class MainWindow(QMainWindow):
         Henüz arka planda yükleniyorsa kullanıcıyı bilgilendirir.
         """
         if self.store:
+            if getattr(self.store, "is_lazy_open", False):
+                self.set_busy_overlay(True, "Excel düzenleme modu ilk kez yükleniyor...", 0)
+                try:
+                    import gc
+                    gc.collect()
+                    self.store.ensure_loaded()
+                    gc.collect()
+                    try:
+                        self.store.migrate_platform_cf_rules()
+                    except Exception:
+                        pass
+                    self._apply_version_to_ui()
+                    self._remember_version_baseline()
+                    self.update_connection_badge("ok")
+                    self.connection_label.setText(f"✓ Excel bağlı  [{self.path.name}]")
+                except Exception as exc:
+                    QMessageBox.critical(self, "Excel yüklenemedi", f"Düzenleme modu açılamadı:\n\n{exc}")
+                    return False
+                finally:
+                    self.set_busy_overlay(False)
             return True
         if getattr(self, "_store_loading", False):
             QMessageBox.information(
