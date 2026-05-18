@@ -89,6 +89,8 @@ def read_version(store) -> Optional[str]:
     Sayfa/hücre yoksa None.
     """
     try:
+        if getattr(store, "is_lazy_open", False):
+            return None
         wb = store.wb
         if "_Meta" not in wb.sheetnames:
             return None

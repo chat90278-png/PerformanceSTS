@@ -406,15 +406,14 @@ class ExcelLoadWorker(QObject):
 
             t_store = time.perf_counter()
             try:
-                store = ExcelStore(self.path)
+                # Büyük platform sayfalarını bu aşamada openpyxl ile belleğe alma.
+                # ExcelStore, ilk düzenleme işleminde MainWindow._ensure_store()
+                # tarafından açık bir busy overlay ile gerçek workbook'u yükler.
+                store = ExcelStore(self.path, lazy_open=True)
             finally:
                 _stop_ping.set()
                 _ping.join(timeout=1.0)
 
-            try:
-                store.migrate_platform_cf_rules()
-            except Exception:
-                pass
             _gc.collect()
             timings["full_store_open"] = time.perf_counter() - t_store
             timings["total"] = time.perf_counter() - total_start
