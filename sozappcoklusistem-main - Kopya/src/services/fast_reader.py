@@ -27,12 +27,14 @@ Kullanım:
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import sqlite3
 import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from xml.etree import ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
 # Proje içi import (bu modül src/services/ altında çalışır)
@@ -179,23 +181,58 @@ class FastExcelReader:
             self._ss = []
         return self._ss
 
+    def _normalise_sheet_target(self, target: str) -> str:
+        """workbook.xml.rels Target değerini zip içindeki sayfa yoluna çevirir."""
+        t = str(target or "").strip().replace("\\", "/")
+        if not t:
+            return ""
+        if t.startswith("/"):
+            # Paket kökünden mutlak yol: /xl/worksheets/sheet1.xml
+            t = t.lstrip("/")
+        elif not t.startswith("xl/"):
+            # workbook.xml.rels, xl/_rels altında; göreli Target'lar xl/ tabanlıdır.
+            t = posixpath.normpath(posixpath.join("xl", t))
+        return posixpath.normpath(t)
+
     def _load_sheet_map(self) -> Dict[str, str]:
-        """Platform adı → xl/worksheets/sheetN.xml eşleşmesi"""
+        """Platform adı → xl/worksheets/sheetN.xml eşleşmesi."""
         if self._sheet_map:
             return self._sheet_map
         with zipfile.ZipFile(self.path, 'r') as zf:
-            wb_xml  = zf.read('xl/workbook.xml').decode('utf-8')
-            rel_xml = zf.read('xl/_rels/workbook.xml.rels').decode('utf-8')
+            wb_xml = zf.read('xl/workbook.xml')
+            rel_xml = zf.read('xl/_rels/workbook.xml.rels')
 
-        sheets = re.findall(r'<sheet\s+name="([^"]+)"[^>]+r:id="([^"]+)"', wb_xml)
-        rels   = dict(re.findall(r'Id="([^"]+)"[^>]+Target="([^"]+)"', rel_xml))
+        rels: Dict[str, str] = {}
+        try:
+            rel_root = ET.fromstring(rel_xml)
+            for rel in rel_root:
+                rid = rel.attrib.get("Id", "")
+                target = rel.attrib.get("Target", "")
+                if rid and target:
+                    rels[rid] = self._normalise_sheet_target(target)
+        except Exception:
+            rel_text = rel_xml.decode('utf-8', 'replace')
+            for rid, target in re.findall(r'Id="([^"]+)"[^>]+Target="([^"]+)"', rel_text):
+                rels[rid] = self._normalise_sheet_target(target)
 
         mapping: Dict[str, str] = {}
-        for name, rid in sheets:
-            target = rels.get(rid, '')
-            if target:
-                xml_path = f"xl/{target}" if not target.startswith('xl/') else target
-                mapping[name] = xml_path
+        try:
+            wb_root = ET.fromstring(wb_xml)
+            rel_ns = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+            main_ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+            for sheet in wb_root.findall(f".//{main_ns}sheet"):
+                name = sheet.attrib.get("name", "")
+                rid = sheet.attrib.get(rel_ns, "")
+                xml_path = rels.get(rid, "")
+                if name and xml_path:
+                    mapping[name] = xml_path
+        except Exception:
+            wb_text = wb_xml.decode('utf-8', 'replace')
+            sheets = re.findall(r'<sheet\s+name="([^"]+)"[^>]+r:id="([^"]+)"', wb_text)
+            for name, rid in sheets:
+                xml_path = rels.get(rid, "")
+                if xml_path:
+                    mapping[name] = xml_path
 
         self._sheet_map = mapping
         return mapping
